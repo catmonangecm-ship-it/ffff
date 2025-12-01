@@ -1086,10 +1086,6 @@
             toSelect.innerHTML = '<option value="">Choisir...</option>';
 
             securityConfig.knownTokens.forEach(token => {
-                // Ne pas ajouter WBNB dans la liste (il est équivalent à BNB)
-                if (token.address.toLowerCase() === WBNB_ADDRESS.toLowerCase()) {
-                    return;
-                }
                 const option = `<option value="${token.address}">${token.symbol}</option>`;
                 fromSelect.innerHTML += option;
                 toSelect.innerHTML += option;
@@ -1156,12 +1152,38 @@
                 const routerContract = new ethers.Contract(PANCAKESWAP_ROUTER, ROUTER_ABI, provider);
 
                 let path = [];
-                if (fromToken === 'BNB') {
+                const isFromWBNB = fromToken.toLowerCase() === WBNB_ADDRESS.toLowerCase();
+                const isToWBNB = toToken.toLowerCase() === WBNB_ADDRESS.toLowerCase();
+
+                // Gérer les cas WBNB
+                if (fromToken === 'BNB' || isFromWBNB) {
+                    if (isToWBNB) {
+                        // BNB/WBNB → WBNB : swap 1:1
+                        document.getElementById('swapToAmount').value = fromAmount;
+                        document.getElementById('swapPrice').textContent = '1 BNB = 1 WBNB';
+                        document.getElementById('minReceived').textContent = fromAmount + ' WBNB';
+                        document.getElementById('priceImpact').textContent = '0%';
+                        return;
+                    }
                     path = [WBNB_ADDRESS, toToken];
-                } else if (toToken === 'BNB') {
+                } else if (toToken === 'BNB' || isToWBNB) {
+                    if (isFromWBNB) {
+                        // WBNB → BNB/WBNB : swap 1:1
+                        document.getElementById('swapToAmount').value = fromAmount;
+                        document.getElementById('swapPrice').textContent = '1 WBNB = 1 BNB';
+                        document.getElementById('minReceived').textContent = fromAmount + ' BNB';
+                        document.getElementById('priceImpact').textContent = '0%';
+                        return;
+                    }
                     path = [fromToken, WBNB_ADDRESS];
                 } else {
-                    path = [fromToken, WBNB_ADDRESS, toToken];
+                    // Token → Token via WBNB
+                    if (isFromWBNB || isToWBNB) {
+                        // Si from ou to est WBNB, path direct
+                        path = [fromToken, toToken];
+                    } else {
+                        path = [fromToken, WBNB_ADDRESS, toToken];
+                    }
                 }
 
                 let amountIn;
@@ -1177,7 +1199,7 @@
                 const outputAmount = amounts[amounts.length - 1];
 
                 let formattedOutput;
-                if (toToken === 'BNB') {
+                if (toToken === 'BNB' || isToWBNB) {
                     formattedOutput = parseFloat(ethers.formatEther(outputAmount));
                 } else {
                     const tokenContract = new ethers.Contract(toToken, ERC20_ABI, provider);
@@ -1190,10 +1212,13 @@
                 const price = formattedOutput / parseFloat(fromAmount);
                 const minReceived = formattedOutput * (1 - swapConfig.slippage / 100);
 
-                const toTokenInfo = securityConfig.knownTokens.find(t => t.address === toToken);
-                const toSymbol = toTokenInfo ? toTokenInfo.symbol : 'Token';
+                const toTokenInfo = securityConfig.knownTokens.find(t => t.address.toLowerCase() === toToken.toLowerCase());
+                const toSymbol = toToken === 'BNB' ? 'BNB' : (toTokenInfo ? toTokenInfo.symbol : 'Token');
+                
+                const fromTokenInfo = securityConfig.knownTokens.find(t => t.address.toLowerCase() === fromToken.toLowerCase());
+                const fromSymbol = fromToken === 'BNB' ? 'BNB' : (fromTokenInfo ? fromTokenInfo.symbol : 'Token');
 
-                document.getElementById('swapPrice').textContent = `1 ${fromToken === 'BNB' ? 'BNB' : 'Token'} = ${price.toFixed(6)} ${toSymbol}`;
+                document.getElementById('swapPrice').textContent = `1 ${fromSymbol} = ${price.toFixed(6)} ${toSymbol}`;
                 document.getElementById('minReceived').textContent = `${minReceived.toFixed(6)} ${toSymbol}`;
                 document.getElementById('priceImpact').textContent = '< 0.1%';
 
@@ -1234,14 +1259,21 @@
 
             try {
                 const routerContract = new ethers.Contract(PANCAKESWAP_ROUTER, ROUTER_ABI, wallet);
+                
+                const isFromWBNB = fromToken.toLowerCase() === WBNB_ADDRESS.toLowerCase();
+                const isToWBNB = toToken.toLowerCase() === WBNB_ADDRESS.toLowerCase();
 
                 let path = [];
-                if (fromToken === 'BNB') {
+                if (fromToken === 'BNB' || isFromWBNB) {
                     path = [WBNB_ADDRESS, toToken];
-                } else if (toToken === 'BNB') {
+                } else if (toToken === 'BNB' || isToWBNB) {
                     path = [fromToken, WBNB_ADDRESS];
                 } else {
-                    path = [fromToken, WBNB_ADDRESS, toToken];
+                    if (isFromWBNB || isToWBNB) {
+                        path = [fromToken, toToken];
+                    } else {
+                        path = [fromToken, WBNB_ADDRESS, toToken];
+                    }
                 }
 
                 const deadline = Math.floor(Date.now() / 1000) + (swapConfig.deadline * 60);
@@ -1251,7 +1283,7 @@
 
                 if (fromToken === 'BNB') {
                     const amountIn = ethers.parseEther(fromAmount);
-                    const amountOutMin = toToken === 'BNB' ? ethers.parseEther(minOutput.toString()) : ethers.parseUnits(minOutput.toString(), 18);
+                    const amountOutMin = (toToken === 'BNB' || isToWBNB) ? ethers.parseEther(minOutput.toString()) : ethers.parseUnits(minOutput.toString(), 18);
 
                     tx = await routerContract.swapExactETHForTokens(
                         amountOutMin,
@@ -1272,7 +1304,7 @@
                         await approveTx.wait();
                     }
 
-                    const amountOutMin = toToken === 'BNB' ? ethers.parseEther(minOutput.toString()) : ethers.parseUnits(minOutput.toString(), 18);
+                    const amountOutMin = (toToken === 'BNB' || isToWBNB) ? ethers.parseEther(minOutput.toString()) : ethers.parseUnits(minOutput.toString(), 18);
 
                     if (toToken === 'BNB') {
                         tx = await routerContract.swapExactTokensForETH(
@@ -1297,8 +1329,8 @@
 
                 await tx.wait();
 
-                const fromTokenInfo = securityConfig.knownTokens.find(t => t.address === fromToken);
-                const toTokenInfo = securityConfig.knownTokens.find(t => t.address === toToken);
+                const fromTokenInfo = securityConfig.knownTokens.find(t => t.address.toLowerCase() === fromToken.toLowerCase());
+                const toTokenInfo = securityConfig.knownTokens.find(t => t.address.toLowerCase() === toToken.toLowerCase());
 
                 const fromSymbol = fromToken === 'BNB' ? 'BNB' : (fromTokenInfo ? fromTokenInfo.symbol : 'Token');
                 const toSymbol = toToken === 'BNB' ? 'BNB' : (toTokenInfo ? toTokenInfo.symbol : 'Token');
